@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::physics::Velocity;
 
-const MOVE_SPEED: f32 = 420.0;
+const MOVE_SPEED: f32 = 320.0;
 const GROUND_ACCEL: f32 = 3400.0;
 const AIR_ACCEL: f32 = 2000.0;
 const JUMP_VELOCITY: f32 = 820.0;

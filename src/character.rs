@@ -30,10 +30,10 @@ fn face_left() -> Quat {
 // Clip indices within Cowboy_Male.gltf (verified from the file's animation list).
 const ANIM_IDLE: usize = 2;
 const ANIM_JUMP: usize = 3;
-const ANIM_RUN: usize = 8;
+const ANIM_WALK: usize = 15;
 
 /// Speed (world units/s) above which the character is considered walking, used
-/// for both the run animation and the facing flip. Filters out collision jitter.
+/// for both the walk animation and the facing flip. Filters out collision jitter.
 const MOVE_THRESHOLD: f32 = 15.0;
 
 /// Marks the visual model child of the player. Carries the scale/offset and gets
@@ -46,7 +46,7 @@ pub struct CharModel;
 #[derive(Component, Debug, PartialEq, Eq, Clone, Copy)]
 enum CharState {
     Idle,
-    Run,
+    Walk,
     Jump,
 }
 
@@ -55,7 +55,7 @@ enum CharState {
 struct CharAnimations {
     graph: Handle<AnimationGraph>,
     idle: AnimationNodeIndex,
-    run: AnimationNodeIndex,
+    walk: AnimationNodeIndex,
     jump: AnimationNodeIndex,
 }
 
@@ -94,13 +94,13 @@ fn setup_animations(
     let clip = |i: usize| asset_server.load(GltfAssetLabel::Animation(i).from_asset(MODEL_PATH));
     let (graph, nodes) = AnimationGraph::from_clips([
         clip(ANIM_IDLE),
-        clip(ANIM_RUN),
+        clip(ANIM_WALK),
         clip(ANIM_JUMP),
     ]);
     commands.insert_resource(CharAnimations {
         graph: graphs.add(graph),
         idle: nodes[0],
-        run: nodes[1],
+        walk: nodes[1],
         jump: nodes[2],
     });
 }
@@ -126,7 +126,7 @@ fn attach_animation_graph(
     }
 }
 
-/// Picks Idle / Run / Jump from the player's physics state and cross-fades to it
+/// Picks Idle / Walk / Jump from the player's physics state and cross-fades to it
 /// on change. Single character, so the two `Single`s (physics body vs. armature)
 /// resolve unambiguously and the system simply skips until the rig exists.
 fn drive_animation(
@@ -138,7 +138,7 @@ fn drive_animation(
     let desired = if !player.on_ground {
         CharState::Jump
     } else if vel.x.abs() > MOVE_THRESHOLD {
-        CharState::Run
+        CharState::Walk
     } else {
         CharState::Idle
     };
@@ -149,7 +149,7 @@ fn drive_animation(
     }
     let (node, looping) = match desired {
         CharState::Idle => (anims.idle, true),
-        CharState::Run => (anims.run, true),
+        CharState::Walk => (anims.walk, true),
         CharState::Jump => (anims.jump, false),
     };
     let active = transitions.play(&mut anim_player, node, Duration::from_millis(150));
