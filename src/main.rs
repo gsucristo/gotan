@@ -9,7 +9,7 @@ mod player;
 
 use bevy::asset::AssetPlugin;
 use bevy::camera::{OrthographicProjection, Projection, ScalingMode};
-use bevy::light::{NotShadowCaster, PointLightShadowMap, ShadowFilteringMethod};
+use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap, ShadowFilteringMethod};
 use bevy::prelude::*;
 use bevy::window::{PresentMode, Window, WindowPlugin};
 
@@ -84,8 +84,8 @@ fn setup(
 ) {
     let player_pos = Vec3::new(0.0, 40.0, 0.0);
 
-    // High-res spot/point shadow atlas → crisper edge on the projected shadow.
-    commands.insert_resource(PointLightShadowMap { size: 8192 });
+    // High-res shadow map: more texels for the same cascade → crisper hard edge.
+    commands.insert_resource(DirectionalLightShadowMap { size: 8192 });
     // Near-black backdrop frames the bright wall and its stark shadow — noir mood.
     commands.insert_resource(ClearColor(Color::srgb(0.03, 0.03, 0.05)));
 
@@ -128,9 +128,28 @@ fn setup(
             AlphaMode::Opaque,
         ))),
         Transform::from_xyz(0.0, 200.0, -34.0),
-        // Only the character should cast into the spot light — keep the wall a
-        // receiver but not a caster.
-        NotShadowCaster,
+    ));
+
+    // Key light rakes across from the right (shadow thrown left) and into the wall
+    // (-Z), with a strong horizontal lean so the cast shadow stretches long and
+    // diagonal — noir. Directional (parallel), so the shadow is caster-sized.
+    commands.spawn((
+        DirectionalLight {
+            illuminance: 6000.0,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+        Transform::default().looking_to(Vec3::new(-0.6, -0.2, -0.78), Vec3::Y),
+        // One cascade tightly bounded to the visible scene, so all shadow-map
+        // texels pack onto what's on screen → small texels → clean hard edge.
+        CascadeShadowConfigBuilder {
+            num_cascades: 1,
+            minimum_distance: 0.1,
+            maximum_distance: 1200.0,
+            first_cascade_far_bound: 1200.0,
+            overlap_proportion: 0.0,
+        }
+        .build(),
     ));
 
     // Player is now an invisible physics body; the animated cowboy rides it as a
@@ -150,36 +169,6 @@ fn setup(
         ))
         .id();
     character::spawn_model(&mut commands, player, &asset_server);
-
-    // Noir key: a SPOT light (not directional) rides in front of and just below the
-    // character, aimed up and back into the wall. A nearby point-source projects the
-    // character's shadow LARGER than the caster (magnification ≈ light→wall / light→
-    // character), throwing a looming, oversized shadow up the wall. As a child of the
-    // player it follows, keeping the effect consistent. The flat shader samples this
-    // spot light's shadow (see flat.wgsl). Intensity is irrelevant to the flat look —
-    // only the shadow matters — but must be nonzero so the light is active.
-    commands.entity(player).with_children(|parent| {
-        parent.spawn((
-            SpotLight {
-                intensity: 5_000_000.0,
-                range: 4000.0,
-                radius: 0.0,
-                // Wide cone: the cowboy is ~126u tall and the light sits close, so
-                // the cone must cover him plus his enlarged shadow.
-                outer_angle: 1.0,
-                inner_angle: 0.8,
-                shadow_maps_enabled: true,
-                ..default()
-            },
-            // Offset to his side (in front on +Z, and to the +X side) and a bit
-            // below, aimed across and up into the wall — so the enlarged shadow
-            // rakes diagonally up-and-left instead of straight up. Move it closer
-            // (smaller z) for a bigger shadow; change the X offset to swing the
-            // shadow's angle/side.
-            Transform::from_xyz(30.0, 40.0, 100.0)
-                .looking_at(Vec3::new(-10.0, 20.0, -140.0), Vec3::Y),
-        ));
-    });
 
     let solid = Color::srgb(0.14, 0.16, 0.22);
     let one_way = Color::srgba(0.2, 0.42, 0.6, 0.5);
@@ -216,7 +205,5 @@ fn spawn_platform(
             half: Vec2::new(w / 2.0, h / 2.0),
             one_way,
         },
-        // Platforms receive the character's shadow but don't cast their own.
-        NotShadowCaster,
     ));
 }

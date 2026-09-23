@@ -4,23 +4,16 @@
 //   how its normal faces the light (no diffuse/NdotL gradient).
 // - cast shadows ON: casting is handled by the inherited StandardMaterial
 //   prepass, so meshes still throw shadows onto the wall.
-// - self-shadow control: we only darken where a SPOT-light shadow map says the
-//   fragment is occluded, AND only if this mesh is a shadow receiver. Tag a mesh
-//   with `NotShadowReceiver` to clear that bit -> it never shadows itself while
-//   still casting onto everything else.
-//
-// We sample a spot light (a nearby point-source) rather than a directional light
-// so the cast shadow is MAGNIFIED — projected larger than the caster onto the
-// wall. Spot lights are clustered, so we find the ones covering this fragment's
-// cluster and take the darkest (min) shadow.
+// - self-shadow control: we only darken where the directional shadow map says
+//   the fragment is occluded, AND only if this mesh is a shadow receiver. Tag a
+//   mesh with `NotShadowReceiver` to clear that bit -> it never shadows itself
+//   while still casting onto everything else.
 
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
     forward_io::{VertexOutput, FragmentOutput},
     mesh_view_bindings as view_bindings,
-    mesh_view_types,
     mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT,
-    clustered_forward as clustering,
     shadows,
 }
 
@@ -39,8 +32,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // How lit this fragment is: 1.0 unless a cast shadow falls on it. We
     // deliberately never touch the surface normal for shading -> flat look.
     var lit = 1.0;
-    if ((pbr_input.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u) {
-        // Which light cluster this fragment falls in (needs view-space depth).
+    if ((pbr_input.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
+            && view_bindings::lights.n_directional_lights > 0u) {
         let view_z = dot(
             vec4<f32>(
                 view_bindings::view.view_from_world[0].z,
@@ -50,29 +43,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
             ),
             in.world_position,
         );
-        let cluster_index = clustering::view_fragment_cluster_index(
-            in.position.xy,
+        lit = shadows::fetch_directional_shadow(
+            0u,
+            in.world_position,
+            pbr_input.world_normal,
             view_z,
-            pbr_input.is_orthographic,
+            in.position.xy,
         );
-        let ranges = clustering::unpack_clusterable_object_index_ranges(cluster_index);
-
-        // Take the darkest shadow among the spot lights covering this cluster.
-        for (var i = ranges.first_spot_light_index_offset;
-                i < ranges.first_reflection_probe_index_offset;
-                i = i + 1u) {
-            let light_id = clustering::get_clusterable_object_id(i);
-            let light = &view_bindings::clustered_lights.data[light_id];
-            if (((*light).flags & mesh_view_types::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
-                lit = min(lit, shadows::fetch_spot_shadow(
-                    light_id,
-                    in.world_position,
-                    pbr_input.world_normal,
-                    (*light).shadow_map_near_z,
-                    in.position.xy,
-                ));
-            }
-        }
     }
 
     let shade = mix(SHADOW_STRENGTH, 1.0, lit);
