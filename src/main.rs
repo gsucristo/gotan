@@ -137,6 +137,12 @@ fn setup(
         DirectionalLight {
             illuminance: 6000.0,
             shadow_maps_enabled: true,
+            // Push shadow bias up (defaults 0.02 / 1.8) to kill self-shadow acne on
+            // the low-poly character under this grazing light — the false diagonal
+            // bands on the face. If shadows start detaching (peter-panning), ease
+            // these back down.
+            shadow_depth_bias: 0.08,
+            shadow_normal_bias: 4.0,
             ..default()
         },
         Transform::default().looking_to(Vec3::new(-0.6, -0.2, -0.78), Vec3::Y),
