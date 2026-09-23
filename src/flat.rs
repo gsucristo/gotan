@@ -5,10 +5,6 @@ use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 
-/// Character parts that should NOT receive shadows — keyed by `GltfMaterialName`.
-/// The head skin self-shadows into ugly acne under the grazing light, so exclude
-/// the face/skin; the rest (body, hat) still self-shadow (hat→body).
-const NO_SELF_SHADOW: &[&str] = &["Skin", "Face"];
 
 /// Flat "fake-2D" material: StandardMaterial with our fragment shader swapped in.
 /// See `assets/shaders/flat.wgsl`.
@@ -87,23 +83,20 @@ fn flatten_gltf_materials(
             continue;
         };
         let mut base = base.clone();
-        let mut exclude_shadow = false;
         if let Some(name) = mat_name {
             if let Some((_, color)) = PART_COLORS.iter().find(|(n, _)| *n == name.0) {
                 base.base_color = *color;
             }
-            exclude_shadow = NO_SELF_SHADOW.contains(&name.0.as_str());
         }
         let flat = flat_materials.add(ExtendedMaterial {
             base,
             extension: FlatExtension::default(),
         });
-        let mut ent = commands.entity(entity);
-        ent.remove::<MeshMaterial3d<StandardMaterial>>()
-            .insert(MeshMaterial3d(flat));
-        // Excluded parts still cast, just never receive → no self-shadow acne.
-        if exclude_shadow {
-            ent.insert(NotShadowReceiver);
-        }
+        // Whole character is cast-only: it throws its shadow onto the wall but
+        // never receives (no self-shadow), so no acne on the low-poly geometry.
+        commands
+            .entity(entity)
+            .remove::<MeshMaterial3d<StandardMaterial>>()
+            .insert((MeshMaterial3d(flat), NotShadowReceiver));
     }
 }
