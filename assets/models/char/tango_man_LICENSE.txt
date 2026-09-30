@@ -1,0 +1,8 @@
+tango_man.glb - built from CC0 assets (no attribution required):
+- Body/rig/hair: Quaternius "Universal Base Characters" (Standard, Superhero_Male_FullBody + Hair_SimpleParted), CC0 1.0
+  https://quaternius.itch.io/universal-base-characters
+- Animations: Quaternius "Universal Animation Library" (Standard, UAL1_Standard.glb, no root motion), CC0 1.0
+  https://quaternius.itch.io/universal-animation-library
+- Hat (also fedora.glb): "Hat Stylised" by hat_my_guy, CC0, https://poly.pizza/m/lNN3PlrjSa
+business_man_alt.glb: Quaternius "Business Man" (Ultimate Modular Men Pack), CC0, https://poly.pizza/m/JFrLIKqvCH
+Materials re-split/retinted and textures stripped.

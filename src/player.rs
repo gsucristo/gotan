@@ -2,7 +2,11 @@ use bevy::prelude::*;
 
 use crate::physics::Velocity;
 
-const MOVE_SPEED: f32 = 320.0;
+/// Ground speeds (world units/s). The character is ~100 units tall, so walk is
+/// ~0.8 body heights/s — a brisk walk — and sprint (Shift) is a full run. The
+/// walk/run clips are playback-scaled to match (see character.rs).
+pub const WALK_SPEED: f32 = 80.0;
+pub const SPRINT_SPEED: f32 = 340.0;
 const GROUND_ACCEL: f32 = 3400.0;
 const AIR_ACCEL: f32 = 2000.0;
 const JUMP_VELOCITY: f32 = 820.0;
@@ -59,7 +63,8 @@ pub fn apply_movement(
     }
 
     let accel = if p.on_ground { GROUND_ACCEL } else { AIR_ACCEL };
-    let target_x = intent.move_x * MOVE_SPEED;
+    let speed = if intent.sprint { SPRINT_SPEED } else { WALK_SPEED };
+    let target_x = intent.move_x * speed;
     let diff = target_x - vel.x;
     let step = accel * dt;
     vel.x += diff.clamp(-step, step);

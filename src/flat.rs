@@ -1,32 +1,34 @@
 use bevy::gltf::GltfMaterialName;
 use bevy::light::NotShadowReceiver;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin};
+use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 
 
-/// Flat "fake-2D" material: StandardMaterial with our fragment shader swapped in.
+/// Two-tone cel material: StandardMaterial with our fragment shader swapped in.
 /// See `assets/shaders/flat.wgsl`.
 pub type FlatMaterial = ExtendedMaterial<StandardMaterial, FlatExtension>;
 
 /// Per-part color overrides for the glTF character, keyed by its material name
-/// (`GltfMaterialName`). The cowboy has no vertex colors, so a part's color is
-/// purely its material base color — set it here to retint that part. This is the
-/// single place to recolor the proof-of-concept model; leave empty to keep the
-/// model's original colors. Known parts: Skin, Face, Jacket, Top, Scarf, Pants,
-/// HatBrown, HatLightBrown, Hair.
+/// (`GltfMaterialName`). Parts are untextured, so a part's color is purely its
+/// material base color — set it here to retint that part. Leave empty to keep
+/// the model's own colors. Known parts: Skin, Jacket, Pants, Shirt, Shoes, Hat,
+/// HatBand, Hair, Eyes.
 const PART_COLORS: &[(&str, Color)] = &[
-    // Tango dancer: black suit + hat, red collar accent, tan skin.
+    // Tango dancer: black suit + fedora, red shirt + hat band, tan skin.
+    // "Black" cloth is painted as dark slate (BTAS convention) so the lit and
+    // shadow tones stay distinct; true black is left to the shadow.
     ("Skin", Color::srgb(0.80, 0.56, 0.34)),
-    ("Face", Color::srgb(0.80, 0.56, 0.34)),
-    ("Jacket", Color::srgb(0.06, 0.06, 0.07)),
-    ("Top", Color::srgb(0.06, 0.06, 0.07)),
-    ("Pants", Color::srgb(0.06, 0.06, 0.07)),
-    ("Scarf", Color::srgb(0.58, 0.05, 0.05)),
-    ("HatBrown", Color::srgb(0.03, 0.03, 0.04)),
-    ("HatLightBrown", Color::srgb(0.58, 0.05, 0.05)),
-    ("Hair", Color::srgb(0.04, 0.04, 0.05)),
+    ("Jacket", Color::srgb(0.20, 0.21, 0.27)),
+    ("Pants", Color::srgb(0.20, 0.21, 0.27)),
+    ("Shoes", Color::srgb(0.10, 0.10, 0.12)),
+    ("Shirt", Color::srgb(0.62, 0.05, 0.05)),
+    ("Hat", Color::srgb(0.16, 0.16, 0.21)),
+    ("HatBand", Color::srgb(0.62, 0.05, 0.05)),
+    ("Hair", Color::srgb(0.03, 0.03, 0.04)),
+    ("Eyes", Color::srgb(0.02, 0.02, 0.02)),
 ];
 
 /// Carries no bindings of its own — it only redirects the fragment shader. That
@@ -54,11 +56,78 @@ pub fn flat(base_color: Color, alpha_mode: AlphaMode) -> FlatMaterial {
     }
 }
 
+/// Unshaded glow (lit window, lamp): black base + emissive, which the shader adds
+/// on top. Values above 1.0 feed bloom.
+pub fn emissive(color: LinearRgba) -> FlatMaterial {
+    ExtendedMaterial {
+        base: StandardMaterial {
+            base_color: Color::BLACK,
+            emissive: color,
+            ..default()
+        },
+        extension: FlatExtension::default(),
+    }
+}
+
+/// How far character normals are bent toward a simple vertical-cylinder shape
+/// (0 = original anatomy, 1 = pure cylinder). Shadow shapes then follow big
+/// forms — one lit side, one dark side — instead of every muscle, like the
+/// broad painted shadow planes in BTAS.
+const NORMAL_SIMPLIFY: f32 = 0.55;
+
+/// Returns a copy of `mesh` with normals blended toward outward directions from
+/// the mesh's vertical center axis. The tallest bounding-box axis is taken as
+/// vertical, so it works whatever the mesh's local up is. Skinning transforms
+/// the new normals like the originals, so it holds up under animation.
+pub fn simplify_normals(mesh: &Mesh) -> Option<Mesh> {
+    let Some(VertexAttributeValues::Float32x3(pos)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        return None;
+    };
+    let Some(VertexAttributeValues::Float32x3(nrm)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+    else {
+        return None;
+    };
+    let (min, max) = pos.iter().fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| {
+        let p = Vec3::from(*p);
+        (lo.min(p), hi.max(p))
+    });
+    let center = (min + max) / 2.0;
+    let ext = max - min;
+    let up = if ext.y >= ext.x && ext.y >= ext.z {
+        Vec3::Y
+    } else if ext.z >= ext.x {
+        Vec3::Z
+    } else {
+        Vec3::X
+    };
+    let normals: Vec<[f32; 3]> = pos
+        .iter()
+        .zip(nrm)
+        .map(|(p, n)| {
+            let n = Vec3::from(*n);
+            let radial = (Vec3::from(*p) - center).reject_from_normalized(up);
+            let radial = radial.try_normalize().unwrap_or(n);
+            n.lerp(radial, NORMAL_SIMPLIFY).try_normalize().unwrap_or(n).to_array()
+        })
+        .collect();
+    let mut out = mesh.clone();
+    out.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    Some(out)
+}
+
+/// Keeps the `boil` shader import (shared by flat.wgsl and outline.wgsl) loaded
+/// so `#import boil::...` resolves.
+#[derive(Resource)]
+struct BoilShader(#[allow(dead_code)] Handle<Shader>);
+
 pub struct FlatMaterialPlugin;
 
 impl Plugin for FlatMaterialPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(MaterialPlugin::<FlatMaterial>::default())
+        let boil = app.world().resource::<AssetServer>().load("shaders/boil.wgsl");
+        app.insert_resource(BoilShader(boil))
+            .add_plugins(MaterialPlugin::<FlatMaterial>::default())
             .add_systems(Update, flatten_gltf_materials);
     }
 }

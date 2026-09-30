@@ -1,11 +1,14 @@
+mod backdrop;
 mod camera;
 mod character;
 mod debug;
 mod flat;
 mod input;
 mod interpolation;
+mod outline;
 mod physics;
 mod player;
+mod post;
 
 use bevy::asset::AssetPlugin;
 use bevy::camera::{OrthographicProjection, Projection, ScalingMode};
@@ -45,6 +48,8 @@ fn main() -> AppExit {
         .add_plugins(debug::DebugPlugin)
         .add_plugins(character::CharacterPlugin)
         .add_plugins(flat::FlatMaterialPlugin)
+        .add_plugins(backdrop::BackdropPlugin)
+        .add_plugins(outline::OutlinePlugin)
         .insert_resource(Time::<Fixed>::from_hz(PHYSICS_TICK_HZ))
         .init_resource::<input::MoveIntent>()
         .init_state::<GameState>()
@@ -86,8 +91,8 @@ fn setup(
 
     // High-res shadow map: more texels for the same cascade → crisper hard edge.
     commands.insert_resource(DirectionalLightShadowMap { size: 8192 });
-    // Near-black backdrop frames the bright wall and its stark shadow — noir mood.
-    commands.insert_resource(ClearColor(Color::srgb(0.03, 0.03, 0.05)));
+    // Black paper: everything is painted light-onto-dark (see backdrop.rs).
+    commands.insert_resource(ClearColor(Color::BLACK));
 
     // Fixed orthographic 3D camera. Orthographic keeps the faked-2D look (no
     // perspective shrink with depth); the elevated offset gives a ~10° down-tilt.
@@ -95,7 +100,7 @@ fn setup(
         Camera3d::default(),
         Projection::Orthographic(OrthographicProjection {
             scaling_mode: ScalingMode::FixedVertical {
-                viewport_height: 540.0,
+                viewport_height: 440.0,
             },
             // Wide range: the camera sits ~480 units back, so the default
             // near=0/far=1000 would clip the scene. Symmetric range is safe.
@@ -104,7 +109,8 @@ fn setup(
             ..OrthographicProjection::default_3d()
         }),
         Transform::from_translation(player_pos + camera::CAMERA_OFFSET)
-            .looking_at(player_pos, Vec3::Y),
+            .looking_at(player_pos, Vec3::Y)
+            .with_translation(player_pos + camera::CAMERA_OFFSET + Vec3::Y * camera::FRAME_LIFT),
         // Per-camera ambient fill. Kept low so the cast shadow stays legible.
         AmbientLight {
             brightness: 200.0,
@@ -112,34 +118,20 @@ fn setup(
         },
         // Sharpest filter → hard-edged shadow (default Gaussian softens it).
         ShadowFilteringMethod::Hardware2x2,
-    ));
-
-    // Backdrop wall a bit behind the gameplay plane (z=0), facing the camera, so
-    // the grazing light throws the ball's long shadow onto it. Purely visual: no
-    // Collider/Solid, so it never touches physics.
-    // Front face at z=-24 = the platforms' back face (depth 48 centered on z=0),
-    // so platforms sit flush against it. Depth 20 → center at -34.
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(4000.0, 2000.0, 20.0))),
-        MeshMaterial3d(materials.add(flat::flat(
-            // Moonlit wall: dim, cool grey-blue — dark enough to read as night,
-            // light enough that the near-black cast shadow still pops against it.
-            Color::srgb(0.28, 0.31, 0.40),
-            AlphaMode::Opaque,
-        ))),
-        Transform::from_xyz(0.0, 200.0, -34.0),
+        post::camera_bundle(),
     ));
 
     // Key light rakes across from the right (shadow thrown left) and into the wall
-    // (-Z), with a strong horizontal lean so the cast shadow stretches long and
-    // diagonal — noir. Directional (parallel), so the shadow is caster-sized.
+    // (-Z). Strongly side-on so forms split roughly half lit / half shadow — the
+    // BTAS two-tone read — and the cast shadow stretches long and diagonal.
+    // Directional (parallel), so the shadow is caster-sized.
     commands.spawn((
         DirectionalLight {
             illuminance: 6000.0,
             shadow_maps_enabled: true,
             ..default()
         },
-        Transform::default().looking_to(Vec3::new(-0.6, -0.2, -0.78), Vec3::Y),
+        Transform::default().looking_to(Vec3::new(-0.8, -0.25, -0.55), Vec3::Y),
         // One cascade tightly bounded to the visible scene, so all shadow-map
         // texels pack onto what's on screen → small texels → clean hard edge.
         CascadeShadowConfigBuilder {

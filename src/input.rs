@@ -8,6 +8,8 @@ pub struct MoveIntent {
     pub move_x: f32,
     pub jump_pressed: bool,
     pub jump_released: bool,
+    /// Sprint held (Shift / gamepad West).
+    pub sprint: bool,
 }
 
 pub fn read_input(
@@ -30,6 +32,7 @@ pub fn read_input(
     let mut g = 0.0;
     let mut gp_jump = false;
     let mut gp_jump_release = false;
+    let mut gp_sprint = false;
     for gp in &gamepads {
         let stick = gp.get(GamepadAxis::LeftStickX).unwrap_or(0.0);
         let dpad = gp
@@ -46,9 +49,15 @@ pub fn read_input(
         if gp.just_released(GamepadButton::South) {
             gp_jump_release = true;
         }
+        if gp.pressed(GamepadButton::West) {
+            gp_sprint = true;
+        }
     }
 
     intent.move_x = (kb + g.clamp(-1.0, 1.0)).clamp(-1.0, 1.0);
     intent.jump_pressed = gp_jump || keyboard.just_pressed(KeyCode::Space);
     intent.jump_released = gp_jump_release || keyboard.just_released(KeyCode::Space);
+    intent.sprint = gp_sprint
+        || keyboard.pressed(KeyCode::ShiftLeft)
+        || keyboard.pressed(KeyCode::ShiftRight);
 }
