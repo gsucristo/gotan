@@ -1,31 +1,32 @@
+//! The player: a character driven by `MoveIntent`, with coyote time, jump
+//! buffering and variable jump height.
+
 use bevy::prelude::*;
 
-use crate::physics::Velocity;
+use crate::camera::CameraTarget;
+use crate::character::{self, Character};
+use crate::input::MoveIntent;
+use crate::physics::{Grounded, MotionSystems, Velocity};
 
-/// Ground speeds (world units/s). The character is ~100 units tall, so walk is
-/// ~0.8 body heights/s — a brisk walk — and sprint (Shift) is a full run. The
-/// walk/run clips are playback-scaled to match (see character.rs).
-pub const WALK_SPEED: f32 = 80.0;
-pub const SPRINT_SPEED: f32 = 340.0;
 const GROUND_ACCEL: f32 = 3400.0;
 const AIR_ACCEL: f32 = 2000.0;
 const JUMP_VELOCITY: f32 = 820.0;
+/// Share of vertical speed kept when jump is released mid-rise.
+const JUMP_CUT: f32 = 0.45;
 const COYOTE_TIME: f32 = 0.1;
 const JUMP_BUFFER_TIME: f32 = 0.12;
 
 #[derive(Component, Debug)]
 pub struct Player {
-    pub on_ground: bool,
-    pub coyote: Timer,
-    pub jump_buffer: Timer,
+    coyote: Timer,
+    jump_buffer: Timer,
 }
 
 impl Default for Player {
     fn default() -> Self {
         Self {
-            on_ground: false,
             // Start spent: a fresh `Once` timer reports `!is_finished()`, which
-            // our jump check reads as an open window — so unspent timers would
+            // the jump check reads as an open window — so unspent timers would
             // fire a jump on the very first tick with no input.
             coyote: spent_timer(COYOTE_TIME),
             jump_buffer: spent_timer(JUMP_BUFFER_TIME),
@@ -44,13 +45,34 @@ fn consume(t: &mut Timer) {
     t.set_elapsed(d);
 }
 
-pub fn apply_movement(
-    time: Res<Time<Fixed>>,
-    intent: Res<crate::input::MoveIntent>,
-    q: Single<(&mut Velocity, &mut Player)>,
+pub struct PlayerPlugin;
+
+impl Plugin for PlayerPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(FixedUpdate, apply_movement.in_set(MotionSystems::Intent));
+    }
+}
+
+/// Spawns the player character with its feet at `feet`.
+pub fn spawn(commands: &mut Commands, assets: &AssetServer, feet: Vec2) -> Entity {
+    let def = &character::TANGO_MAN;
+    let body = character::spawn(commands, assets, def, feet);
+    commands.entity(body).insert((
+        Player::default(),
+        CameraTarget {
+            anchor: Vec2::NEG_Y * def.body.y / 2.0,
+        },
+    ));
+    body
+}
+
+fn apply_movement(
+    time: Res<Time>,
+    intent: Res<MoveIntent>,
+    player: Single<(&Character, &Grounded, &mut Velocity, &mut Player)>,
 ) {
     let dt = time.delta_secs();
-    let (mut vel, mut p) = q.into_inner();
+    let (Character(def), grounded, mut vel, mut p) = player.into_inner();
 
     p.coyote.tick(time.delta());
     p.jump_buffer.tick(time.delta());
@@ -58,26 +80,24 @@ pub fn apply_movement(
     if intent.jump_pressed {
         p.jump_buffer.reset();
     }
-    if p.on_ground {
+    if grounded.0 {
         p.coyote.reset();
     }
 
-    let accel = if p.on_ground { GROUND_ACCEL } else { AIR_ACCEL };
-    let speed = if intent.sprint { SPRINT_SPEED } else { WALK_SPEED };
+    let accel = if grounded.0 { GROUND_ACCEL } else { AIR_ACCEL };
+    let speed = if intent.sprint { def.run_speed } else { def.walk_speed };
     let target_x = intent.move_x * speed;
-    let diff = target_x - vel.x;
     let step = accel * dt;
-    vel.x += diff.clamp(-step, step);
+    vel.x += (target_x - vel.x).clamp(-step, step);
 
     // Variable jump height: letting go of jump mid-rise cuts vertical speed.
     if intent.jump_released && vel.y > 0.0 {
-        vel.y *= 0.45;
+        vel.y *= JUMP_CUT;
     }
 
-    // Jump: consume the fresher of the input buffer plus the coyote window.
+    // Jump: needs both an open input buffer and an open coyote window.
     if !p.jump_buffer.is_finished() && !p.coyote.is_finished() {
         vel.y = JUMP_VELOCITY;
-        p.on_ground = false;
         consume(&mut p.coyote);
         consume(&mut p.jump_buffer);
     }

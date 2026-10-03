@@ -1,24 +1,33 @@
 //! "Black paper" dark-deco backdrop: red smog sky, silhouette skyline layers with
-//! parallax, lit windows, sweeping searchlights, a fog band, and a near deco
-//! facade that receives the character's cast shadow. Purely visual — nothing here
-//! has a Collider, so it never touches physics.
+//! parallax, lit windows, sweeping searchlights, a fog band, a near deco facade
+//! that receives the character's cast shadow, and the key light with its
+//! shadow-only gobos. Purely visual — nothing here has a physics body.
 
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::RenderLayers;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
-use crate::camera::{CAMERA_OFFSET, FRAME_LIFT};
-use crate::flat::{self, FlatMaterial};
+use bevy::light::CascadeShadowConfigBuilder;
+
+use crate::camera::{CameraSystems, FollowCamera};
+use crate::cel::{self, FlatMaterial, KeyLight};
+use crate::level::{GROUND_TOP, PLATFORM_DEPTH, STREET_Y};
 
 /// Horizontal/vertical scroll factor relative to the camera. 1.0 = moves with the
 /// camera (infinitely far), 0.0 = fixed in the world. The camera is orthographic,
-/// so depth alone gives no parallax; this system fakes it.
+/// so depth alone gives no parallax; this system fakes it. `base` is where the
+/// layer sits when the camera frames `PARALLAX_REF`.
 #[derive(Component)]
 struct Parallax {
     factor: Vec2,
     base: Vec3,
 }
+
+/// Camera focus at which layers sit at their `base`: the player standing on the
+/// street at x = 0.
+const PARALLAX_REF: Vec2 = Vec2::new(0.0, GROUND_TOP);
 
 /// Searchlight beam pivoting around its base.
 #[derive(Component)]
@@ -32,12 +41,9 @@ pub struct BackdropPlugin;
 
 impl Plugin for BackdropPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_backdrop).add_systems(
+        app.add_systems(Startup, (spawn_backdrop, spawn_key_light)).add_systems(
             Update,
-            (
-                apply_parallax.after(crate::camera::move_camera),
-                sweep_searchlights,
-            ),
+            (apply_parallax.after(CameraSystems), sweep_searchlights),
         );
     }
 }
@@ -113,23 +119,23 @@ fn spawn_backdrop(
             (350.0, Color::srgb(0.015, 0.01, 0.02)),
         ],
     ));
-    let white = materials.add(flat::flat(Color::WHITE, AlphaMode::Opaque));
-    spawn_layer(&mut commands, Vec2::ONE, Vec3::new(0.0, 0.0, -900.0), |p| {
+    let white = materials.add(cel::flat(Color::WHITE, AlphaMode::Opaque));
+    spawn_layer(&mut commands, Vec2::ONE, Vec3::new(0.0, -124.0, -900.0), |p| {
         p.spawn((Mesh3d(sky), MeshMaterial3d(white), Transform::default(), paint()));
     });
 
     // --- Far skyline: dark maroon silhouettes against the glow, sparse dim windows.
-    let far_body = materials.add(flat::flat(Color::srgb(0.20, 0.05, 0.06), AlphaMode::Opaque));
-    let far_side = materials.add(flat::flat(Color::srgb(0.09, 0.02, 0.035), AlphaMode::Opaque));
-    let far_win = materials.add(flat::emissive(LinearRgba::rgb(1.2, 0.55, 0.2)));
+    let far_body = materials.add(cel::flat(Color::srgb(0.20, 0.05, 0.06), AlphaMode::Opaque));
+    let far_side = materials.add(cel::flat(Color::srgb(0.09, 0.02, 0.035), AlphaMode::Opaque));
+    let far_win = materials.add(cel::emissive(LinearRgba::rgb(1.2, 0.55, 0.2)));
     let mut rng = Lcg(7);
-    spawn_layer(&mut commands, Vec2::new(0.85, 0.8), Vec3::new(0.0, -330.0, -700.0), |p| {
+    spawn_layer(&mut commands, Vec2::new(0.85, 0.8), Vec3::new(0.0, -429.0, -700.0), |p| {
         skyline(p, &mut rng, &rect, &tri, &far_body, &far_side, &far_win, 2600.0, (40.0, 110.0), (160.0, 400.0), 0.08, 1.0);
     });
 
     // --- Fog band drifting between the skylines.
-    let fog = materials.add(flat::flat(Color::srgba(0.55, 0.16, 0.08, 0.22), AlphaMode::Blend));
-    spawn_layer(&mut commands, Vec2::new(0.75, 0.7), Vec3::new(0.0, -210.0, -600.0), |p| {
+    let fog = materials.add(cel::flat(Color::srgba(0.55, 0.16, 0.08, 0.22), AlphaMode::Blend));
+    spawn_layer(&mut commands, Vec2::new(0.75, 0.7), Vec3::new(0.0, -297.0, -600.0), |p| {
         p.spawn((
             Mesh3d(rect.clone()),
             MeshMaterial3d(fog),
@@ -146,8 +152,8 @@ fn spawn_backdrop(
     ));
     // Additive: the cel shader doesn't premultiply, so the color *is* the added
     // light — keep it dim.
-    let beam_mat = materials.add(flat::flat(Color::srgb(0.20, 0.16, 0.11), AlphaMode::Add));
-    spawn_layer(&mut commands, Vec2::new(0.7, 0.65), Vec3::new(0.0, -300.0, -550.0), |p| {
+    let beam_mat = materials.add(cel::flat(Color::srgb(0.20, 0.16, 0.11), AlphaMode::Add));
+    spawn_layer(&mut commands, Vec2::new(0.7, 0.65), Vec3::new(0.0, -381.0, -550.0), |p| {
         for (x, speed, phase) in [(-700.0, 0.23, 0.0), (250.0, 0.31, 2.0), (1100.0, 0.19, 4.0)] {
             p.spawn((
                 Mesh3d(beam.clone()),
@@ -160,15 +166,103 @@ fn spawn_backdrop(
     });
 
     // --- Mid skyline: near-black deco towers (setbacks + spires), warm windows.
-    let mid_body = materials.add(flat::flat(Color::srgb(0.11, 0.05, 0.06), AlphaMode::Opaque));
-    let mid_side = materials.add(flat::flat(Color::srgb(0.02, 0.012, 0.02), AlphaMode::Opaque));
-    let mid_win = materials.add(flat::emissive(LinearRgba::rgb(2.4, 1.3, 0.45)));
+    let mid_body = materials.add(cel::flat(Color::srgb(0.11, 0.05, 0.06), AlphaMode::Opaque));
+    let mid_side = materials.add(cel::flat(Color::srgb(0.02, 0.012, 0.02), AlphaMode::Opaque));
+    let mid_win = materials.add(cel::emissive(LinearRgba::rgb(2.4, 1.3, 0.45)));
     let mut rng = Lcg(42);
-    spawn_layer(&mut commands, Vec2::new(0.6, 0.55), Vec3::new(0.0, -300.0, -400.0), |p| {
+    spawn_layer(&mut commands, Vec2::new(0.6, 0.55), Vec3::new(0.0, -368.0, -400.0), |p| {
         skyline(p, &mut rng, &rect, &tri, &mid_body, &mid_side, &mid_win, 2400.0, (70.0, 150.0), (150.0, 360.0), 0.10, 1.6);
     });
 
     spawn_facade(&mut commands, &mut meshes, &mut materials);
+    spawn_gobos(&mut commands, &mut meshes, &mut materials);
+}
+
+/// Key light: high moon over the buildings across the street (in front of the
+/// camera), slightly from the right. It shines down onto the facade, and those
+/// buildings' rooflines (`spawn_gobos`) throw big shadow shapes over the play
+/// area. Directional (parallel), so shadows are caster-sized. Sees render
+/// layers 0 (scene) and `GOBO_LAYER` (shadow-only gobos).
+fn spawn_key_light(mut commands: Commands) {
+    commands.spawn((
+        KeyLight,
+        DirectionalLight {
+            illuminance: 6000.0,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+        Transform::default().looking_to(Vec3::new(-0.5, -0.6, -0.62), Vec3::Y),
+        RenderLayers::from_layers(&[0, GOBO_LAYER]),
+        // One cascade tightly bounded to the visible scene, so all shadow-map
+        // texels pack onto what's on screen → small texels → clean hard edge.
+        CascadeShadowConfigBuilder {
+            num_cascades: 1,
+            minimum_distance: 0.1,
+            maximum_distance: 1200.0,
+            first_cascade_far_bound: 1200.0,
+            overlap_proportion: 0.0,
+        }
+        .build(),
+    ));
+}
+
+/// Render layer seen only by the key light: meshes here cast shadows but are
+/// never drawn by the camera.
+const GOBO_LAYER: usize = 1;
+
+/// Depth of the gobo row: the buildings across the street, between the camera
+/// and the play plane.
+const GOBO_Z: f32 = 150.0;
+
+/// The buildings across the street, which we never see — only their shadows.
+/// The key light comes from above and in front, so each block's stepped deco
+/// roofline projects down and to the left as a shadow line across the facade and
+/// player. Everything below the line is in shadow. Tall blocks shadow a whole
+/// stretch, low ones cut across the body, and gaps let lit shafts through. The
+/// shadow lands ~120 units left and ~150 below the roofline on the play plane.
+fn spawn_gobos(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<FlatMaterial>,
+) {
+    let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
+    let mat = materials.add(cel::flat(Color::BLACK, AlphaMode::Opaque));
+    let layer = RenderLayers::layer(GOBO_LAYER);
+    let bottom = -1000.0;
+    let depth = 60.0;
+
+    // (center x, width, roofline y)
+    let blocks = [
+        (-1250.0, 420.0, 700.0),
+        (-900.0, 220.0, 170.0),
+        (-560.0, 340.0, 620.0),
+        // gap -390..-120: lit shaft
+        (40.0, 320.0, 230.0),
+        (330.0, 180.0, 700.0),
+        // gap 420..560: lit shaft
+        (800.0, 420.0, 330.0),
+        (1200.0, 380.0, 700.0),
+    ];
+    for (cx, w, top) in blocks {
+        let mut spawn = |x: f32, w: f32, y0: f32, y1: f32| {
+            commands.spawn((
+                Mesh3d(cube.clone()),
+                MeshMaterial3d(mat.clone()),
+                Transform::from_xyz(x, (y0 + y1) / 2.0, GOBO_Z)
+                    .with_scale(Vec3::new(w, y1 - y0, depth)),
+                layer.clone(),
+            ));
+        };
+        spawn(cx, w, bottom, top);
+        // Stepped deco crown: two setbacks, so the shadow line steps too.
+        let mut sw = w;
+        let mut y = top;
+        for step_h in [40.0, 30.0] {
+            sw *= 0.6;
+            spawn(cx, sw, y, y + step_h);
+            y += step_h;
+        }
+    }
 }
 
 /// Spawns a parallax layer root and fills it via `build`.
@@ -275,13 +369,9 @@ fn skyline(
     }
 }
 
-/// Street level: the ground platform's bottom edge (see `setup` in main.rs).
-/// Below it is the building we're standing on — a black mass, black paper.
-const STREET_Y: f32 = -180.0;
-
-/// Front face of the facade = the platforms' back face (z = -24), so platforms sit
-/// flush against it and the key light throws the character's shadow onto it.
-const FACADE_FRONT_Z: f32 = -24.0;
+/// Front face of the facade = the platforms' back face, so platforms sit flush
+/// against it and the key light throws the character's shadow onto it.
+const FACADE_FRONT_Z: f32 = -PLATFORM_DEPTH / 2.0;
 
 /// Near building facade the gameplay runs along: warm-dark stone blocks with
 /// stepped deco tops. Protruding pilasters catch the key light on their front and
@@ -291,14 +381,14 @@ fn spawn_facade(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<FlatMaterial>,
 ) {
-    let stone = materials.add(flat::flat(Color::srgb(0.50, 0.33, 0.25), AlphaMode::Opaque));
-    let trim = materials.add(flat::flat(Color::srgb(0.60, 0.40, 0.28), AlphaMode::Opaque));
+    let stone = materials.add(cel::flat(Color::srgb(0.50, 0.33, 0.25), AlphaMode::Opaque));
+    let trim = materials.add(cel::flat(Color::srgb(0.60, 0.40, 0.28), AlphaMode::Opaque));
     let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
 
     // The rooftop we run on: occludes sky and skyline below street level so the
     // bottom of the frame is near-black silhouette. Spans the gameplay depth,
     // just behind the platforms' front face.
-    let mass = materials.add(flat::flat(Color::srgb(0.03, 0.02, 0.025), AlphaMode::Opaque));
+    let mass = materials.add(cel::flat(Color::srgb(0.03, 0.02, 0.025), AlphaMode::Opaque));
     commands.spawn((
         Mesh3d(cube.clone()),
         MeshMaterial3d(mass),
@@ -364,15 +454,13 @@ fn spawn_facade(
     }
 }
 
-/// Layers follow the camera's displacement from its start by their factor.
-fn apply_parallax(
-    camera: Single<&Transform, (With<Camera3d>, Without<Parallax>)>,
-    mut layers: Query<(&Parallax, &mut Transform)>,
-) {
-    let cam = Vec2::new(camera.translation.x, camera.translation.y - CAMERA_OFFSET.y - FRAME_LIFT);
+/// Layers follow the camera focus's displacement from `PARALLAX_REF` by their
+/// factor.
+fn apply_parallax(camera: Single<&FollowCamera>, mut layers: Query<(&Parallax, &mut Transform)>) {
+    let d = camera.focus - PARALLAX_REF;
     for (layer, mut tf) in &mut layers {
-        tf.translation.x = layer.base.x + cam.x * layer.factor.x;
-        tf.translation.y = layer.base.y + cam.y * layer.factor.y;
+        tf.translation.x = layer.base.x + d.x * layer.factor.x;
+        tf.translation.y = layer.base.y + d.y * layer.factor.y;
     }
 }
 

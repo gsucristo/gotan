@@ -1,7 +1,7 @@
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 
-use crate::PHYSICS_TICK_HZ;
+use crate::physics::PhysicsDebug;
 
 #[derive(Resource, Default)]
 struct DebugConfig {
@@ -15,7 +15,8 @@ pub struct DebugPlugin;
 
 impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DebugConfig>()
+        app.add_plugins(FrameTimeDiagnosticsPlugin::default())
+            .init_resource::<DebugConfig>()
             .add_systems(Startup, spawn_debug_text)
             .add_systems(Update, (toggle_debug, update_debug_text));
     }
@@ -42,10 +43,12 @@ fn spawn_debug_text(mut commands: Commands) {
 fn toggle_debug(
     input: Res<ButtonInput<KeyCode>>,
     mut config: ResMut<DebugConfig>,
+    mut physics_debug: ResMut<PhysicsDebug>,
     mut text: Single<&mut Visibility, With<DebugText>>,
 ) {
     if input.just_pressed(KeyCode::Backquote) {
         config.visible = !config.visible;
+        physics_debug.0 = config.visible;
         **text = if config.visible {
             Visibility::Visible
         } else {
@@ -65,9 +68,10 @@ fn update_debug_text(
     else {
         return;
     };
-    let tick_ms = fixed.timestep().as_secs_f64() * 1000.0;
+    let step = fixed.timestep().as_secs_f64();
     text.0 = format!(
-        "fps: {fps:.0}\nphysics: {tick_ms:.1}ms/tick @ {:.0}Hz",
-        PHYSICS_TICK_HZ
+        "fps: {fps:.0}\nphysics: {:.1}ms/tick @ {:.0}Hz",
+        step * 1000.0,
+        1.0 / step
     );
 }
